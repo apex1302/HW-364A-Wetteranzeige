@@ -1,20 +1,18 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
 #include <ArduinoJson.h>
-
 #include <Wire.h>
 #include <Adafruit_SSD1306.h>
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
-
 #define OLED_RESET     -1
 #define SCREEN_ADDRESS 0x3C
 #define OLED_SDA 14   // D6 (GPIO14)
 #define OLED_SCL 12   // D5 (GPIO12)
 
-const char* ssid = "X";
-const char* password = "KEY";
+const char* ssid = "ssid";
+const char* password = "key";
 
 const String url = "http://api.open-meteo.com/v1/forecast"
                    "?latitude=48.73&longitude=9.27"
@@ -37,7 +35,7 @@ struct Weather {
 
 int screen = 0;
 unsigned long lastSwitch = 0;
-const unsigned long interval = 10000; // 10 Sekunden
+const unsigned long interval = 10000;
 
 Adafruit_SSD1306* display;
 
@@ -53,15 +51,9 @@ String weatherDescFromCode(int code) {
 }
 
 String windDirectionToString(int degrees) {
-  if (degrees >= 337 || degrees < 23) return "N";
-  else if (degrees >= 23 && degrees < 68) return "NO";
-  else if (degrees >= 68 && degrees < 113) return "O";
-  else if (degrees >= 113 && degrees < 158) return "SO";
-  else if (degrees >= 158 && degrees < 203) return "S";
-  else if (degrees >= 203 && degrees < 248) return "SW";
-  else if (degrees >= 248 && degrees < 293) return "W";
-  else if (degrees >= 293 && degrees < 337) return "NW";
-  else return "?";
+  const char* directions[] = { "N", "NO", "O", "SO", "S", "SW", "W", "NW" };
+  int index = (degrees + 22) / 45;
+  return directions[index % 8];
 }
 
 void showMessageOnDisplay(const char* line1, const char* line2 = nullptr, const char* line3 = nullptr) {
@@ -70,8 +62,8 @@ void showMessageOnDisplay(const char* line1, const char* line2 = nullptr, const 
   display->setTextColor(SSD1306_WHITE);
   display->setCursor(0, 0);
   display->println(line1);
-  if(line2) display->println(line2);
-  if(line3) display->println(line3);
+  if (line2) display->println(line2);
+  if (line3) display->println(line3);
   display->display();
 }
 
@@ -83,10 +75,10 @@ void setup() {
 
   Wire.begin(OLED_SDA, OLED_SCL);
   display = new Adafruit_SSD1306(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
-  if(!display->begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+  if (!display->begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
     Serial.println(F("SSD1306 allocation failed"));
     showMessageOnDisplay("Display Fehler", "SSD1306 init failed");
-    while(1);
+    while (1);
   }
   display->clearDisplay();
   display->display();
@@ -96,6 +88,8 @@ void setup() {
   showMessageOnDisplay("Verbinde mit WLAN", ssid);
 
   WiFi.begin(ssid, password);
+  WiFi.persistent(true);         // <--- added
+  WiFi.setAutoReconnect(true);   // <--- added
 
   unsigned long wifiStart = millis();
   while (WiFi.status() != WL_CONNECTED) {
@@ -104,9 +98,10 @@ void setup() {
     if (millis() - wifiStart > 20000) {
       Serial.println("\nWLAN Verbindung fehlgeschlagen!");
       showMessageOnDisplay("WLAN Fehler", "Keine Verbindung");
-      while(1);
+      while (1);
     }
   }
+
   Serial.println("\nWLAN verbunden.");
   showMessageOnDisplay("WLAN verbunden", WiFi.localIP().toString().c_str());
   delay(2000);
@@ -125,10 +120,20 @@ void loop() {
 }
 
 void fetchWeather() {
+  // Manual reconnect fallback
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("Kein WLAN, kein Abruf");
-    showMessageOnDisplay("WLAN getrennt", "Kein Abruf möglich");
-    return;
+    Serial.println("WLAN getrennt, versuche neu zu verbinden...");
+    WiFi.disconnect();
+    WiFi.begin(ssid, password);
+    unsigned long startAttempt = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 10000) {
+      delay(500);
+      Serial.print(".");
+    }
+    if (WiFi.status() != WL_CONNECTED) {
+      showMessageOnDisplay("WLAN Fehler", "Neuverbinden fehlgeschl.");
+      return;
+    }
   }
 
   Serial.println("Hole Wetterdaten...");
@@ -215,6 +220,8 @@ void displayWeather(int s) {
     case 2:
       display->println(F("Wind heute:"));
       snprintf(buf, sizeof(buf), "Stärke: %.1f km/h", weather.currWindSpeed);
+      display->println(buf);
+      snprintf(buf, sizeof(buf), "Richtung: %d°", weather.currWindDir);
       display->println(buf);
       snprintf(buf, sizeof(buf), "Richtung: %s", windDirectionToString(weather.currWindDir).c_str());
       display->println(buf);
